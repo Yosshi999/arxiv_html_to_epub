@@ -145,7 +145,6 @@
                     if (!res.ok) throw new Error("Failed to fetch article.");
                     return res.text();
                 });
-
                 const doc = new DOMParser().parseFromString(html, "text/html");
                 const title = doc.querySelector(".ltx_title_document")?.textContent || "arXiv";
                 console.log("Document title:", title);
@@ -155,7 +154,13 @@
                 if (!article) {
                     throw new Error("Failed to find article content.");
                 }
-                // // Extract CSS link
+                const watermarkElm = doc.querySelector("#target-section");
+                const titleElm = doc.querySelector(".ltx_title_document");
+                const authorsElm = doc.querySelector(".ltx_authors");
+                const abstElm = doc.querySelector("#abstract");
+                const sections = Array.from(doc.querySelectorAll("article > section"));
+
+                // Extract CSS link
                 let styles = "";
                 const cssLinks = Array.from(doc.querySelectorAll("link[rel='stylesheet']")).map(link => link.getAttribute("href"));
                 const resolvedCssNames = cssLinks.map(link => new URL(link, url).pathname);
@@ -177,6 +182,7 @@
                     }
                 }
                 // Extract images
+                const imgMapper = new Map();
                 const imgElements = article.querySelectorAll("img");
                 for (const imgElm of imgElements) {
                     const src = imgElm.getAttribute("src");
@@ -193,9 +199,12 @@
                             reader.onerror = reject;
                             reader.readAsDataURL(imgBlob);
                         });
+                        imgMapper.set(imgElm.id, {elm: imgElm, url: dataUrl, blob: imgBlob});
                         imgElm.setAttribute("src", dataUrl);
                     }
                 }
+                // Sanitize buttons
+                article.querySelectorAll("button").forEach(btn => btn.remove());
                 // Localize links
                 const linkElements = article.querySelectorAll("a");
                 for (const linkElm of linkElements) {
@@ -219,24 +228,55 @@
                 const previewHtml = `<!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <title>${title}</title>
-    <style>${styles}</style>
+  <meta charset="UTF-8">
+  <title>${title}</title>
+  <style>${styles}</style>
 </head>
 <body>
-    <div class="ltx_page_main" id="main">
-        <div class="ltx_page_content">
-            ${article.innerHTML}
-        </div>
+  <div class="ltx_page_main" id="main">
+    <div class="ltx_page_content">
+      ${watermarkElm?.outerHTML || ""}
+      <article class="ltx_document ltx_authors_1line">
+        ${titleElm?.outerHTML || ""}
+        ${authorsElm?.outerHTML || ""}
+        ${abstElm?.outerHTML || ""}
+        ${sections.map(sec => sec.outerHTML).join("\n")}
+      </article>
     </div>
+  </div>
 </body>
 </html>`;
                 previewFrame.srcdoc = previewHtml;
                 previewDiv.style.display = "block";
+
                 // Create EPUB
                 infoMessage("Converting to EPUB...");
                 const zip = new JSZip();
                 zip.file("mimetype", "application/epub+zip");
+
+                // insert CSS
+                zip.file("EPUB/style.css", styles);
+
+                // Rewrite image src to local files
+                const imageManifests = [];
+                for (const [id, imgData] of imgMapper) {
+                    const imgElm = imgData.elm;
+                    if (imgElm) {
+                        const ext = imgData.blob.type.split("/")[1] || "png";
+                        const localFileName = `images/${id}.${ext}`;
+                        imgElm.setAttribute("src", localFileName);
+                        zip.file(`EPUB/images/${id}.${ext}`, imgData.blob, {binary: true});
+                        imageManifests.push(`<item id="${id}" href="images/${id}.${ext}" media-type="${imgData.blob.type}"/>`);
+                    }
+                }
+
+                const chapters = sections.map(sec => (
+                    `<item id="${sec.id}" href="${sec.id}.xhtml" media-type="application/xhtml+xml"/>`
+                ));
+                const spines = sections.map(sec => (
+                    `<itemref idref="${sec.id}"/>`
+                ));
+
                 zip.file("META-INF/container.xml",
 `<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -255,14 +295,21 @@
     <meta property="dcterms:modified">${new Date().toISOString().slice(0,19)}Z</meta>
   </metadata>
   <manifest>
+    <item href="style.css" id="style" media-type="text/css"/>
     <item href="nav.xhtml" id="nav" media-type="application/xhtml+xml" properties="nav"/>
-    <item id="chapter_0" href="chapter_0.xhtml" media-type="application/xhtml+xml"/>
+    <item href="first.xhtml" id="first" media-type="application/xhtml+xml"/>
+    ${chapters.join("\n")}
+    ${imageManifests.join("\n")}
   </manifest>
   <spine>
-    <itemref idref="chapter_0"/>
+    <itemref idref="first"/>
+    ${spines.join("\n")}
   </spine>
 </package>`);
 
+                const navs = sections.map(sec => (
+                    `<li><a href="${sec.id}.xhtml">${escapeXml(sec.querySelector(".ltx_title_section")?.textContent || sec.id)}</a></li>`
+                ));
                 zip.file("EPUB/nav.xhtml",
 `<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
@@ -274,28 +321,58 @@
   <body>
     <nav epub:type="toc" id="id" role="doc-toc">
       <h2>Table of Contents</h2>
-      <ol/>
+      <ol>
+        <li><a href="first.xhtml">Title</a></li>
+        ${navs.join("\n")}
+      </ol>
     </nav>
   </body>
 </html>`);
 
-                zip.file("EPUB/chapter_0.xhtml",
+                zip.file("EPUB/first.xhtml",
 `<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" epub:prefix="z3998: http://www.daisy.org/z3998/2012/vocab/structure/#" lang="ja" xml:lang="ja">
   <head>
     <meta charset="UTF-8">
     <title>${escapeXml(title)}</title>
-    <style>${styles}</style>
+    <link rel="stylesheet" type="text/css" href="style.css" />
   </head>
 <body>
   <div class="ltx_page_main" id="main">
     <div class="ltx_page_content">
-      ${article.innerHTML}
+      ${watermarkElm?.outerHTML || ""}
+      <article class="ltx_document ltx_authors_1line">
+        ${titleElm?.outerHTML || ""}
+        ${authorsElm?.outerHTML || ""}
+        ${abstElm?.outerHTML || ""}
+      </article>
     </div>
   </div>
 </body>
 </html>`);
+
+                // FIXME: style.css breaks Kindle Previewer in bib.xhtml
+                sections.forEach(sec => {
+                    zip.file(`EPUB/${sec.id}.xhtml`,
+`<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" epub:prefix="z3998: http://www.daisy.org/z3998/2012/vocab/structure/#" lang="ja" xml:lang="ja">
+  <head>
+    <meta charset="UTF-8">
+    <title>${escapeXml(title)}</title>
+    ${sec.id === "bib" ? "" : `<link rel="stylesheet" type="text/css" href="style.css" />`}
+  </head>
+<body>
+  <div class="ltx_page_main" id="main">
+    <div class="ltx_page_content">
+      <article class="ltx_document ltx_authors_1line">
+        ${sec.outerHTML}
+      </article>
+    </div>
+  </div>
+</body>
+</html>`);});
 
                 const epubBlob = await zip.generateAsync({type:"blob", mimeType:"application/epub+zip"});
                 const epubUrl = URL.createObjectURL(epubBlob);

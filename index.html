@@ -4,6 +4,17 @@
     <meta charset="UTF-8" />
     <title>arXiv.html to EPUB</title>
     <script src="jszip.min.js"></script>
+    <script>
+MathJax = {
+  tex: {
+    inlineMath: {'[+]': [['$', '$']]}
+  },
+  svg: {
+    fontCache: 'none'
+  }
+};
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@4/mml-svg.js" defer></script>
     <style>
     body {
       font-family: sans-serif;
@@ -129,6 +140,25 @@
             statusDiv.className = "";
         }
 
+        async function getSvgImage(math, options = {}) {
+          const adaptor = MathJax.startup.adaptor;
+          const result = await MathJax.mathml2svgPromise(math, options);
+          let svg = adaptor.tags(result, 'svg')[0];
+          let serialized = new XMLSerializer().serializeToString(svg);
+          let url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(serialized);
+          const img = new Image();
+          img.src = url;
+          await new Promise((resolve, reject) => {
+            img.onload = () => resolve();
+            img.onerror = (e) => reject(e);
+          });
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(img.naturalWidth, 1);
+          canvas.height = Math.max(img.naturalHeight, 1);
+          canvas.getContext('2d').drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight);
+          return canvas.toDataURL(`image/png`);
+        }
+
         convertButton.addEventListener("click", async () => {
             const id = extractArxivId(arxivInput.value);
             console.log("Extracted arXiv ID:", id);
@@ -154,10 +184,10 @@
                 if (!article) {
                     throw new Error("Failed to find article content.");
                 }
-                const watermarkElm = doc.querySelector("#target-section");
+                const watermarkElm = doc.getElementById("target-section");
                 const titleElm = doc.querySelector(".ltx_title_document");
                 const authorsElm = doc.querySelector(".ltx_authors");
-                const abstElm = doc.querySelector("#abstract");
+                const abstElm = doc.querySelector(".ltx_abstract");
                 const sections = Array.from(doc.querySelectorAll("article > section"));
 
                 // Extract CSS link
@@ -182,6 +212,7 @@
                     }
                 }
                 // Extract images
+                infoMessage("Extracting images...");
                 const imgMapper = new Map();
                 const imgElements = article.querySelectorAll("img");
                 for (const imgElm of imgElements) {
@@ -204,8 +235,19 @@
                     }
                 }
                 // Sanitize buttons
+                infoMessage("Cleaning unnecessary elements...");
                 article.querySelectorAll("button").forEach(btn => btn.remove());
+                // MathML to SVG
+                infoMessage("Converting MathML to SVG...");
+                const mathElms = Array.from(article.querySelectorAll("math"));
+                for (const mathElm of mathElms) {
+                  const dataUrl = await getSvgImage(mathElm.outerHTML);
+                  const imgElm = document.createElement("img");
+                  imgElm.setAttribute("src", dataUrl);
+                  mathElm.replaceWith(imgElm);
+                }
                 // Localize links
+                infoMessage("Localizing links...");
                 const linkElements = article.querySelectorAll("a");
                 for (const linkElm of linkElements) {
                     const href = linkElm.getAttribute("href");
@@ -361,7 +403,6 @@
   <head>
     <meta charset="UTF-8">
     <title>${escapeXml(title)}</title>
-    ${sec.id === "bib" ? "" : `<link rel="stylesheet" type="text/css" href="style.css" />`}
   </head>
 <body>
   <div class="ltx_page_main" id="main">

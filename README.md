@@ -7,8 +7,6 @@ Static HTML for fetching arXiv html and converting to EPUB file.
 This repository is licensed under MIT. See [LICENSE](./LICENSE).
 
 ## External libraries
-### arXiv CSS (./arxiv_styles/*)
-The license is unknown. Maybe [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/) according to https://info.arxiv.org/help/license/index.html#metadata-license
 
 ### JSZip (./jszip.min.js)
 ```

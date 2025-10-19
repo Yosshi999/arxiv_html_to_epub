@@ -120,10 +120,6 @@ MathJax = {
                 '"': 'quot'
             })[c]};`);
 
-        const expectedStyleNames = [
-            "arxiv-html-papers-20250916.css"
-        ];
-
         function extractArxivId(input) {
             const arxivIdPattern = /([0-9]{4}\.[0-9]{4,5}(v[0-9]+)?)/i;
             const match = input.match(arxivIdPattern);
@@ -190,27 +186,11 @@ MathJax = {
                 const abstElm = doc.querySelector(".ltx_abstract");
                 const sections = Array.from(doc.querySelectorAll("article > section"));
 
-                // Extract CSS link
-                let styles = "";
-                const cssLinks = Array.from(doc.querySelectorAll("link[rel='stylesheet']")).map(link => link.getAttribute("href"));
-                const resolvedCssNames = cssLinks.map(link => new URL(link, url).pathname);
-                for (const cssName of resolvedCssNames) {
-                    const cssBaseName = cssName.substring(cssName.lastIndexOf("/")+1);
-                    if (expectedStyleNames.includes(cssBaseName)) {
-                        const localCssUrl = `/arxiv_styles/${cssBaseName}`;
-                        styles += await fetch(localCssUrl).then(res => {
-                            if (!res.ok) throw new Error(`Failed to fetch local CSS: ${localCssUrl}`);
-                            return res.text();
-                        });
-                    } else {
-                        const localCssUrl = `/arxiv_styles/${expectedStyleNames[0]}`;
-                        console.warn(`Our local CSS is outdated. Please report to developer: ${cssName} -> ${localCssUrl}`);
-                        styles += await fetch(localCssUrl).then(res => {
-                            if (!res.ok) throw new Error(`Failed to fetch local CSS: ${localCssUrl}`);
-                            return res.text();
-                        });
-                    }
-                }
+                // Get EPUB CSS
+                const styles = await fetch("/epub_style.css").then(res => {
+                    if (!res.ok) throw new Error("Failed to fetch EPUB CSS.");
+                    return res.text();
+                });
                 // Extract images
                 infoMessage("Extracting images...");
                 const imgMapper = new Map();
